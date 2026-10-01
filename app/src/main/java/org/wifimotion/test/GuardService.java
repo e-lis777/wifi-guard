@@ -12,7 +12,7 @@ import java.util.concurrent.*;
 public class GuardService extends Service {
  Store store;JSONObject config;Handler h=new Handler();OkHttpClient http;WebSocket socket;boolean stopped=false,connected=false;
  final ExecutorService sender=Executors.newSingleThreadExecutor();Detector detector=new Detector();
- WifiManager wifi;PowerManager.WakeLock wake;int rssi=-127,freq=0,phase=0,testCount=0;long phaseEnd=0,armAt=0,lastAlert=0,lastHeartbeat=0,lastProbe=0,lastNotification=0;
+ WifiManager wifi;WifiManager.WifiLock wifiKeepAlive;PowerManager.WakeLock wake;int rssi=-127,freq=0,phase=0,testCount=0;long phaseEnd=0,armAt=0,lastAlert=0,lastHeartbeat=0,lastProbe=0,lastNotification=0;
  ArrayList<Integer> bg=new ArrayList<>();boolean calibration=false,armed=false,validWifi=false;String note="",network="";double maxPass=0;int movementCount=0;
  final Runnable tick=new Runnable(){public void run(){try{step();}catch(Exception e){note="Ошибка измерения: "+e.getClass().getSimpleName();}if(!stopped)h.postDelayed(this,500);}};
  @Override public void onCreate(){super.onCreate();store=new Store(this);config=store.config();
@@ -21,6 +21,7 @@ public class GuardService extends Service {
   http=new OkHttpClient.Builder().connectTimeout(15,TimeUnit.SECONDS).readTimeout(0,TimeUnit.SECONDS).writeTimeout(15,TimeUnit.SECONDS).pingInterval(45,TimeUnit.SECONDS).build();
   wifi=(WifiManager)getApplicationContext().getSystemService(WIFI_SERVICE);armed=store.p.getBoolean("armed",false);loadCalibration();
   PowerManager pm=getSystemService(PowerManager.class);wake=pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"WifiGuard:monitor");wake.acquire();
+  if(store.tv())try{wifiKeepAlive=wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF,"WifiGuard:radio");wifiKeepAlive.setReferenceCounted(false);wifiKeepAlive.acquire();store.log("Удержание Wi-Fi включено");}catch(Exception e){store.log("Не удалось удерживать Wi-Fi: "+e.getClass().getSimpleName());}
   if(store.ready()){connect();h.post(tick);}else stopSelf();
  }
  Notification notification(String title,String text,String channel){Intent i=new Intent(this,MainActivity.class);PendingIntent pi=PendingIntent.getActivity(this,0,i,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);return new Notification.Builder(this,channel).setSmallIcon(android.R.drawable.ic_lock_idle_lock).setContentTitle(title).setContentText(text).setContentIntent(pi).setAutoCancel(!channel.equals("service")).build();}
@@ -56,11 +57,11 @@ public class GuardService extends Service {
   if(store.tv()){if(!m.optString("kind").equals("command"))return;String action=m.optString("action");if(!Arrays.asList("arm","disarm","status").contains(action))return;command(action,m.getString("request"));}
   else {store.p.edit().putString("cursor",cursor).apply();String kind=m.optString("kind");long time=m.getLong("time");
    if(time>store.p.getLong("lastSeen",0))store.p.edit().putLong("lastSeen",time).putBoolean("lostAlert",false).apply();
-   if(kind.equals("status")){if(time>=store.p.getLong("statusTime",0))store.p.edit().putString("remote",m.toString()).putLong("statusTime",time).apply();if(m.optString("request").equals(store.p.getString("pending",""))&&!m.optString("request").isEmpty()){store.p.edit().remove("pending").remove("pendingAt").apply();note="Состояние подтверждено ТВ";}}
+   if(kind.equals("status")){if(time>=store.p.getLong("statusTime",0)){String room=m.optString("name","");if(!room.isEmpty()&&room.length()<=80){config.put("name",room);store.p.edit().putString("config",config.toString()).apply();}store.p.edit().putString("remote",m.toString()).putLong("statusTime",time).apply();}if(m.optString("request").equals(store.p.getString("pending",""))&&!m.optString("request").isEmpty()){store.p.edit().remove("pending").remove("pendingAt").apply();note="Состояние подтверждено ТВ";}}
    else if(kind.equals("motion")){store.log("Движение: "+new java.text.SimpleDateFormat("HH:mm:ss",Locale.getDefault()).format(new Date(time)));if(now-time<120000)alarm("Обнаружено движение");}
   }
  }catch(Exception ignored){}}
- void publishStatus(String request)throws Exception{JSONObject m=new JSONObject().put("kind","status").put("request",request).put("armed",armed).put("exitUntil",armAt).put("calibrated",calibration).put("wifi",validWifi).put("rssi",rssi).put("frequency",freq).put("note",note).put("count",movementCount);publish(config.getString("events"),m,true);lastHeartbeat=System.currentTimeMillis();}
+ void publishStatus(String request)throws Exception{JSONObject m=new JSONObject().put("kind","status").put("name",config.optString("name","Датчик")).put("request",request).put("armed",armed).put("exitUntil",armAt).put("calibrated",calibration).put("wifi",validWifi).put("rssi",rssi).put("frequency",freq).put("note",note).put("count",movementCount);publish(config.getString("events"),m,true);lastHeartbeat=System.currentTimeMillis();}
  void publish(String topic,JSONObject m,boolean cache)throws Exception{long now=System.currentTimeMillis();String day=new java.text.SimpleDateFormat("yyyy-MM-dd",Locale.US).format(new Date(now));int used=day.equals(store.p.getString("budgetDay",""))?store.p.getInt("budget",0):0;
   if(used>=220){note="Локальный лимит отправок на сегодня исчерпан. Журнал работает.";store.log(note);return;}m.put("id",UUID.randomUUID().toString()).put("time",now);String encrypted=new SecureMessage(config.getString("key"),topic).seal(m);store.p.edit().putString("budgetDay",day).putInt("budget",used+1).apply();
   sender.execute(()->{try(Response response=http.newBuilder().readTimeout(20,TimeUnit.SECONDS).build().newCall(new Request.Builder().url(config.optString("server")+"/"+topic).header("X-Firebase","no").header("X-Cache",cache?"yes":"no").post(RequestBody.create(MediaType.parse("text/plain"),encrypted)).build()).execute()){if(!response.isSuccessful())h.post(()->{note=response.code()==429?"Сервис ограничил отправки. Журнал сохраняется.":"Ошибка доставки HTTP "+response.code();store.log(note);});}catch(Exception e){h.post(()->note="Сообщение не доставлено; проверь интернет");}});
@@ -84,6 +85,6 @@ public class GuardService extends Service {
   }
   if(now-lastNotification>5000){lastNotification=now;getSystemService(NotificationManager.class).notify(1,notification("Wi-Fi Охрана",store.tv()?(!validWifi?"Нет измерений Wi-Fi":armed?(calibration?"Охрана включена":"Охрана приостановлена: калибровка"):armAt>0?"Отсчёт включения":"Охрана выключена"):(connected?"Приём уведомлений работает":"Переподключение…"),"service"));}
  }
- @Override public void onDestroy(){stopped=true;h.removeCallbacksAndMessages(null);if(socket!=null)socket.cancel();sender.shutdownNow();if(wake!=null&&wake.isHeld())wake.release();store.p.edit().putBoolean("connected",false).apply();super.onDestroy();}
+ @Override public void onDestroy(){stopped=true;h.removeCallbacksAndMessages(null);if(socket!=null)socket.cancel();sender.shutdownNow();if(wifiKeepAlive!=null&&wifiKeepAlive.isHeld())wifiKeepAlive.release();if(wake!=null&&wake.isHeld())wake.release();store.p.edit().putBoolean("connected",false).apply();super.onDestroy();}
  @Override public IBinder onBind(Intent i){return null;}
 }

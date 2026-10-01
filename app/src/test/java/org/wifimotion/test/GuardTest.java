@@ -4,6 +4,7 @@ import static org.junit.Assert.*;
 import org.json.JSONObject;
 import java.util.Base64;
 public class GuardTest {
+ @Test public void pairingPreservesUnicode(){String config="{\"name\":\"Гостиная — комната 🏠\"}";String code=Pairing.encode(config);assertTrue(code.matches("WG1:[A-Za-z0-9_-]+"));assertEquals(config,Pairing.decode(code));assertEquals(config,Pairing.decode(config));}
  @Test public void stableNoiseAndRepeatedPasses(){Detector d=new Detector();d.mean=-30;d.sd=.3;for(int i=0;i<100;i++)assertFalse(d.sample(-30));assertFalse(d.sample(-35));assertFalse(d.sample(-30));assertFalse(d.sample(-33));assertTrue(d.sample(-34));for(int i=0;i<20;i++)assertFalse(d.sample(-35));assertFalse(d.sample(-30));assertFalse(d.sample(-34));assertTrue(d.sample(-34));}
  @Test public void noisyBackgroundRaisesThreshold(){Detector d=new Detector();d.mean=-50;d.sd=2;for(int i=0;i<20;i++)assertFalse(d.sample(-54));assertFalse(d.sample(-58));assertTrue(d.sample(-58));}
  @Test public void sensitivityChangesThreshold(){Detector d=new Detector();d.mean=-30;d.sd=0;d.sensitivity=2;assertFalse(d.sample(-32));assertTrue(d.sample(-32));d.reset();d.sensitivity=0;assertFalse(d.sample(-34));assertFalse(d.sample(-34));}
