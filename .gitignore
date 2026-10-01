@@ -1,0 +1,11 @@
+.gradle/
+**/build/
+local.properties
+qa-jvm/
+node_modules/
+.env
+*.keystore
+*.jks
+captures/
+delivery/Wifi-motion-test-0.1.0.apk
+delivery/Wifi-Guard-0.2.0.apk

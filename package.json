@@ -1,0 +1,7 @@
+{
+  "name": "wifi-guard-transport-check",
+  "private": true,
+  "type": "module",
+  "scripts": { "test:live": "node scripts/live-ntfy.mjs" },
+  "devDependencies": { "ws": "8.22.0" }
+}
